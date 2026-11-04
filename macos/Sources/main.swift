@@ -343,7 +343,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let host = NSHostingController(rootView: OverlayView(store: store, settings: settings))
         host.sizingOptions = [.preferredContentSize]
         panel.contentViewController = host
-        if !panel.setFrameUsingName("TokenOverlay") { resetPosition() }
+        // Saved frame missing, or on a display that is no longer connected
+        if !panel.setFrameUsingName("TokenOverlay") || !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) {
+            resetPosition()
+        }
         panel.setFrameAutosaveName("TokenOverlay")
         panel.alphaValue = settings.idleOpacity
         applyClickThrough()
@@ -403,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(toggle("Click-through (ignore mouse)", #selector(toggleClickThrough), on: settings.clickThrough))
         menu.addItem(toggle("Compact", #selector(toggleCompact), on: settings.compact))
         menu.addItem(toggle("Show count in menu bar", #selector(toggleMenuBarCount), on: settings.menuBarCount))
+        menu.addItem(toggle("Launch with Claude", #selector(toggleClaude), on: ClaudeHook.installed))
         menu.addItem(toggle("Launch at login", #selector(toggleLogin), on: SMAppService.mainApp.status == .enabled))
         menu.addItem(toggle("Reset position", #selector(resetPos), on: false))
         menu.addItem(.separator())
@@ -458,6 +462,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             let a = NSAlert(); a.messageText = "Couldn't change launch at login"; a.informativeText = error.localizedDescription; a.runModal()
         }
+    }
+    @objc private func toggleClaude() {
+        do { try ClaudeHook.set(!ClaudeHook.installed) } catch {
+            let a = NSAlert(); a.messageText = "Couldn't change launch with Claude"
+            a.informativeText = "\(ClaudeHook.settingsURL.path): \(error.localizedDescription)"; a.runModal()
+        }
+    }
+}
+
+// MARK: - Launch with Claude
+// A SessionStart hook in ~/.claude/settings.json opens the app whenever a Claude Code
+// session starts (CLI, desktop app Code tab, IDE extensions). `open -g` hands the launch
+// to LaunchServices, so it returns at once and never starts a second copy.
+
+enum ClaudeHook {
+    static let mark = "Claude Token Overlay.app"
+
+    static var settingsURL: URL {
+        if let env = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], let first = env.split(separator: ",").first {
+            return URL(fileURLWithPath: String(first)).appendingPathComponent("settings.json")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
+    }
+
+    static var installed: Bool {
+        guard let root = try? read(), let hooks = root["hooks"] as? [String: Any],
+              let groups = hooks["SessionStart"] as? [Any] else { return false }
+        return groups.contains(where: isOurs)
+    }
+
+    private static func isOurs(_ group: Any) -> Bool {
+        guard let g = group as? [String: Any], let hs = g["hooks"] as? [[String: Any]] else { return false }
+        return hs.contains { h in
+            ([h["command"] as? String ?? ""] + (h["args"] as? [String] ?? [])).joined(separator: " ").contains(mark)
+        }
+    }
+
+    /// Missing or empty file reads as {}; malformed JSON throws so it is never overwritten.
+    private static func read() throws -> [String: Any] {
+        guard let data = try? Data(contentsOf: settingsURL),
+              !String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "TokenOverlay", code: 1, userInfo: [NSLocalizedDescriptionKey: "not a JSON object"])
+        }
+        return obj
+    }
+
+    static func set(_ on: Bool) throws {
+        let app = Bundle.main.bundlePath
+        if on && !app.hasSuffix(".app") {
+            throw NSError(domain: "TokenOverlay", code: 2, userInfo: [NSLocalizedDescriptionKey: "run this from the app bundle (\(app))"])
+        }
+        var root = try read()
+        var hooks = root["hooks"] as? [String: Any] ?? [:]
+        var groups = (hooks["SessionStart"] as? [Any] ?? []).filter { !isOurs($0) }
+        if on {
+            groups.append(["matcher": "startup|resume", "hooks": [[
+                "type": "command", "command": "/usr/bin/open", "args": ["-g", app], "timeout": 15]]] as [String: Any])
+        }
+        if groups.isEmpty { hooks.removeValue(forKey: "SessionStart") } else { hooks["SessionStart"] = groups }
+        if hooks.isEmpty { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let backup = settingsURL.appendingPathExtension("before-token-overlay")
+        if fm.fileExists(atPath: settingsURL.path) && !fm.fileExists(atPath: backup.path) {
+            try fm.copyItem(at: settingsURL, to: backup)
+        }
+        var out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
+        out.append(0x0a)
+        try out.write(to: settingsURL, options: .atomic)
     }
 }
 
@@ -724,6 +799,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-screenshots") {
     let dir = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "docs"
     MainActor.assumeIsolated { renderScreenshots(to: dir) }
     exit(0)
+}
+
+if CommandLine.arguments.contains("--install-hook") || CommandLine.arguments.contains("--uninstall-hook") {
+    let on = CommandLine.arguments.contains("--install-hook")
+    do {
+        try ClaudeHook.set(on)
+        print("\(on ? "Added" : "Removed") the SessionStart hook in \(ClaudeHook.settingsURL.path)")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("Couldn't update \(ClaudeHook.settingsURL.path) (left unchanged): \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
 }
 
 if CommandLine.arguments.contains("--dump") {   // headless check: print totals and exit

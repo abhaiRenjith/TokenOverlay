@@ -7,15 +7,22 @@ session logs those clients write to %USERPROFILE%\\.claude\\projects.
 
 Pure standard library (tkinter + ctypes). Run with:  pythonw token_overlay.py
 Headless check:                                      python token_overlay.py --dump
+Open with every Claude Code session:                 python token_overlay.py --install-hook
+                                         (undo with  python token_overlay.py --uninstall-hook)
+
+Started from a console (python.exe, a double-click) it relaunches itself under
+pythonw and lets the console close. Only one copy runs at a time.
 """
 
 import ctypes
 import datetime as dt
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -190,6 +197,127 @@ def startup_file():
     return Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "ClaudeTokenOverlay.cmd"
 
 
+def log_error(text):
+    """Append to error.log next to settings.json; pythonw has nowhere else to print."""
+    try:
+        p = settings_path().with_name("error.log")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"--- {dt.datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n")
+        return p
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------- process
+
+SCRIPT = Path(__file__).resolve()
+
+
+def pythonw_exe():
+    exe = Path(sys.executable)
+    w = exe.with_name("pythonw.exe")
+    return w if IS_WIN and w.exists() else exe
+
+
+def has_console():
+    return IS_WIN and bool(ctypes.windll.kernel32.GetConsoleWindow())
+
+
+def spawn_detached():
+    """Start the overlay as its own process, outside any console or job, and return."""
+    args = [str(pythonw_exe()), str(SCRIPT)]
+    if not IS_WIN:
+        subprocess.Popen(args, start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    for extra in (0x01000000, 0):     # CREATE_BREAKAWAY_FROM_JOB, if the job allows it
+        try:
+            subprocess.Popen(args, creationflags=flags | extra, close_fds=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            if not extra:
+                raise
+
+
+_mutex = None
+
+
+def already_running():
+    """Hold a named mutex for the process lifetime; True if another copy holds it."""
+    global _mutex
+    if not IS_WIN:
+        return False
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateMutexW.restype = ctypes.c_void_p
+    _mutex = k.CreateMutexW(None, False, "Local\\ClaudeTokenOverlay")
+    return ctypes.get_last_error() == 183   # ERROR_ALREADY_EXISTS
+
+
+# ---------------------------------------------------------------- Claude Code hook
+# A SessionStart hook in ~/.claude/settings.json opens the overlay whenever a Claude
+# Code session starts (CLI, desktop app Code tab, IDE extensions). `args` runs the
+# program directly, so no bash or PowerShell quoting is involved.
+
+HOOK_MARK = "token_overlay"
+
+
+def claude_settings_path():
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(env.split(",")[0]) if env else Path.home() / ".claude"
+    return base / "settings.json"
+
+
+def _is_ours(group):
+    return any(HOOK_MARK in json.dumps(h) for h in group.get("hooks", []) if isinstance(h, dict))
+
+
+def _read_claude_settings():
+    p = claude_settings_path()
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return p, {}
+    data = json.loads(text) if text.strip() else {}   # malformed JSON raises: never overwrite it
+    if not isinstance(data, dict):
+        raise ValueError(f"{p} is not a JSON object")
+    return p, data
+
+
+def hook_installed():
+    try:
+        _, data = _read_claude_settings()
+    except (OSError, ValueError):
+        return False
+    groups = data.get("hooks", {}).get("SessionStart", [])
+    return any(_is_ours(g) for g in groups if isinstance(g, dict))
+
+
+def set_claude_hook(enable):
+    p, data = _read_claude_settings()
+    hooks = data.setdefault("hooks", {})
+    groups = [g for g in hooks.get("SessionStart", []) if not (isinstance(g, dict) and _is_ours(g))]
+    if enable:
+        groups.append({"matcher": "startup|resume", "hooks": [{
+            "type": "command", "command": str(pythonw_exe()), "args": [str(SCRIPT), "--spawn"], "timeout": 15}]})
+    if groups:
+        hooks["SessionStart"] = groups
+    else:
+        hooks.pop("SessionStart", None)
+    if not hooks:
+        data.pop("hooks")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    bak = p.with_name(p.name + ".before-token-overlay")
+    if p.exists() and not bak.exists():
+        bak.write_bytes(p.read_bytes())
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+    return p
+
+
 # ---------------------------------------------------------------- Win32 helpers
 
 GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOOLWINDOW = -20, 0x80000, 0x20, 0x80
@@ -208,6 +336,17 @@ def win_set_exstyle(root, add=0, remove=0):
 
 def ctrl_down():
     return IS_WIN and bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def on_screen(x, y):
+    """True if the window's top-left corner lands on a connected monitor."""
+    if not IS_WIN:
+        return True
+    return bool(ctypes.windll.user32.MonitorFromPoint(POINT(int(x) + 20, int(y) + 20), 0))   # MONITOR_DEFAULTTONULL
 
 
 # ---------------------------------------------------------------- UI
@@ -235,6 +374,7 @@ class Overlay:
         self.drag = None
 
         r = self.root = tk.Tk()
+        r.report_callback_exception = lambda *exc: log_error("".join(traceback.format_exception(*exc)))
         r.title("Claude Token Overlay")
         r.overrideredirect(True)
         r.attributes("-topmost", True)
@@ -261,8 +401,9 @@ class Overlay:
             r.bind_all("<Button-2>", self._popup)
 
         r.update_idletasks()
-        x = self.cfg["x"] if self.cfg["x"] is not None else r.winfo_screenwidth() - WIDTH - 24
-        y = self.cfg["y"] if self.cfg["y"] is not None else 40
+        x, y = self.cfg["x"], self.cfg["y"]
+        if x is None or y is None or not on_screen(x, y):   # e.g. saved on a monitor that is unplugged now
+            x, y = r.winfo_screenwidth() - WIDTH - 24, 40
         r.geometry(f"+{int(x)}+{int(y)}")
 
         if IS_WIN:
@@ -394,6 +535,7 @@ class Overlay:
         self.v_compact = tk.BooleanVar(value=self.cfg["compact"])
         self.v_click = tk.BooleanVar(value=self.cfg["click_through"])
         self.v_login = tk.BooleanVar(value=IS_WIN and startup_file().exists())
+        self.v_claude = tk.BooleanVar(value=hook_installed())
         m = self.menu = tk.Menu(self.root, tearoff=0)
         for key, lbl in PERIODS:
             m.add_radiobutton(label=lbl[0].upper() + lbl[1:], value=key, variable=self.v_period,
@@ -405,6 +547,8 @@ class Overlay:
         if IS_WIN:
             m.add_checkbutton(label="Click-through (hold Ctrl to grab)", variable=self.v_click,
                               command=lambda: self.set_cfg("click_through", self.v_click.get()))
+        m.add_checkbutton(label="Launch with Claude", variable=self.v_claude, command=self.toggle_claude)
+        if IS_WIN:
             m.add_checkbutton(label="Launch at login", variable=self.v_login, command=self.toggle_login)
         m.add_command(label="Reset position", command=self.reset_position)
         m.add_separator()
@@ -443,6 +587,14 @@ class Overlay:
         except OSError:
             self.v_login.set(f.exists())
 
+    def toggle_claude(self):
+        try:
+            set_claude_hook(self.v_claude.get())
+        except (OSError, ValueError) as e:
+            self.v_claude.set(hook_installed())
+            from tkinter import messagebox
+            messagebox.showerror("Launch with Claude", f"Couldn't update {claude_settings_path()}:\n{e}")
+
     def open_settings(self):
         tk = self.tk
         w = tk.Toplevel(self.root)
@@ -473,8 +625,30 @@ def dump():
         print(f"{label}: {st['total']}  {parts}  in={st['in']} out={st['out']} cw={st['cw']} cr={st['cr']}")
 
 
-if __name__ == "__main__":
-    if "--dump" in sys.argv:
-        dump()
-    else:
+def main():
+    argv = sys.argv[1:]
+    if "--dump" in argv:
+        return dump()
+    if "--install-hook" in argv or "--uninstall-hook" in argv:
+        on = "--install-hook" in argv
+        try:
+            print(f"{'Added' if on else 'Removed'} the SessionStart hook in {set_claude_hook(on)}")
+        except (OSError, ValueError) as e:
+            sys.exit(f"Couldn't update {claude_settings_path()} (left unchanged): {e}")
+        return
+    if "--spawn" in argv or has_console():   # hand off to a console-less, detached pythonw
+        return spawn_detached()
+    if already_running():
+        return
+    try:
         Overlay().run()
+    except Exception:
+        where = log_error(traceback.format_exc())
+        if IS_WIN:
+            ctypes.windll.user32.MessageBoxW(None, f"Claude Token Overlay failed to start.\n\nDetails: {where}",
+                                             "Claude Token Overlay", 0x10)
+        raise
+
+
+if __name__ == "__main__":
+    main()
