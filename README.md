@@ -4,6 +4,15 @@ A small, translucent, always-on-top overlay that tracks your Claude Code token u
 
 It reads the session logs those clients write to `~/.claude/projects` (on Windows `%USERPROFILE%\.claude\projects`; also `~/.config/claude/projects` and `$CLAUDE_CONFIG_DIR`). Nothing leaves your machine.
 
+![The overlay floating over a terminal](docs/overlay-desktop.png)
+
+<p>
+  <img src="docs/overlay-full.png" alt="Full overlay" width="288">
+  <img src="docs/overlay-compact.png" alt="Compact overlay" width="288">
+</p>
+
+<sub>Screenshots are rendered from the app's own view with sample numbers (macOS). Regenerate with `TokenOverlay --render-screenshots docs`.</sub>
+
 ## What it shows
 
 - Total tokens for today, the last 5 hours, or the last 7 days (click the number to switch)

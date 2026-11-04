@@ -176,8 +176,9 @@ final class Store: ObservableObject {
 
 final class Settings: ObservableObject {
     private let d = UserDefaults.standard
-    @Published var period: Period { didSet { d.set(period.rawValue, forKey: "period") } }
-    @Published var compact: Bool { didSet { d.set(compact, forKey: "compact") } }
+    var persist = true   // false for screenshot rendering, so demo values never touch real prefs
+    @Published var period: Period { didSet { if persist { d.set(period.rawValue, forKey: "period") } } }
+    @Published var compact: Bool { didSet { if persist { d.set(compact, forKey: "compact") } } }
     @Published var idleOpacity: Double { didSet { d.set(idleOpacity, forKey: "idleOpacity") } }
     @Published var hoverOpacity: Double { didSet { d.set(hoverOpacity, forKey: "hoverOpacity") } }
     @Published var clickThrough: Bool { didSet { d.set(clickThrough, forKey: "clickThrough") } }
@@ -200,7 +201,9 @@ final class Settings: ObservableObject {
 func fmt(_ n: Int) -> String {
     let x = Double(n)
     if x >= 1e9 { return String(format: "%.2fB", x / 1e9) }
+    if x >= 1e8 { return String(format: "%.0fM", x / 1e6) }
     if x >= 1e6 { return String(format: "%.2fM", x / 1e6) }
+    if x >= 1e5 { return String(format: "%.0fK", x / 1e3) }
     if x >= 1e3 { return String(format: "%.1fK", x / 1e3) }
     return "\(n)"
 }
@@ -240,6 +243,7 @@ struct SourceBar: View {
 struct OverlayView: View {
     @ObservedObject var store: Store
     @ObservedObject var settings: Settings
+    var solid = false   // flat background instead of live blur (used for rendered screenshots)
 
     var body: some View {
         let s = store.stats[settings.period] ?? Stats()
@@ -266,7 +270,7 @@ struct OverlayView: View {
                         if v > 0 || src != .other {
                             HStack(spacing: 4) {
                                 Circle().fill(src.color).frame(width: 7, height: 7)
-                                Text("\(src.rawValue) \(fmt(v))")
+                                Text("\(src.rawValue) \(fmt(v))").lineLimit(1).fixedSize()
                             }
                         }
                     }
@@ -284,7 +288,7 @@ struct OverlayView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .frame(width: 240, alignment: .leading)
-        .background(VisualEffect())
+        .background { if solid { Color(red: 0.12, green: 0.12, blue: 0.13) } else { VisualEffect() } }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
         .environment(\.colorScheme, .dark)
@@ -454,6 +458,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let a = NSAlert(); a.messageText = "Couldn't change launch at login"; a.informativeText = error.localizedDescription; a.runModal()
         }
     }
+}
+
+// MARK: - Screenshot rendering (made-up numbers, no real usage)
+
+func demoStats(cli: Int, app: Int, ide: Int, input: Int, output: Int, cacheWrite: Int) -> Stats {
+    var s = Stats()
+    s.input = input; s.output = output; s.cacheWrite = cacheWrite
+    s.cacheRead = cli + app + ide - input - output - cacheWrite
+    s.bySource = [.cli: cli, .app: app, .ide: ide]
+    return s
+}
+
+func demoStore() -> Store {
+    let st = Store()
+    st.stats = [
+        .today: demoStats(cli: 2_510_000, app: 1_610_000, ide: 703_000, input: 41_200, output: 212_400, cacheWrite: 608_000),
+        .fiveHours: demoStats(cli: 820_000, app: 390_000, ide: 100_000, input: 9_800, output: 61_000, cacheWrite: 150_000),
+        .week: demoStats(cli: 15_900_000, app: 8_300_000, ide: 4_200_000, input: 260_000, output: 1_350_000, cacheWrite: 3_100_000),
+    ]
+    st.updated = Date()
+    return st
+}
+
+func demoSettings(compact: Bool) -> Settings {
+    let s = Settings(); s.persist = false
+    s.compact = compact; s.period = .today
+    return s
+}
+
+struct DemoDesktop: View {
+    let store: Store
+    let settings: Settings
+    let lines: [(String, Color)] = [
+        ("$ claude", .white),
+        ("> refactor the payment module and add tests", Color(white: 0.85)),
+        ("", .white),
+        ("● Read src/payments/charge.ts (182 lines)", Color(white: 0.6)),
+        ("● Read src/payments/refund.ts (96 lines)", Color(white: 0.6)),
+        ("● Update src/payments/charge.ts  +41 −27", Color(red: 0.45, green: 0.8, blue: 0.55)),
+        ("● Update src/payments/refund.ts  +18 −9", Color(red: 0.45, green: 0.8, blue: 0.55)),
+        ("● Write tests/payments/charge.test.ts  +120", Color(red: 0.45, green: 0.8, blue: 0.55)),
+        ("● Bash npm test -- payments", Color(white: 0.6)),
+        ("  ✓ 24 passed (1.8s)", Color(red: 0.45, green: 0.8, blue: 0.55)),
+        ("", .white),
+        ("Split charge() into validate, authorize and capture steps so each one can be tested on its own,", Color(white: 0.85)),
+        ("and moved the retry logic into a shared helper used by both charge and refund.", Color(white: 0.85)),
+        ("", .white),
+        ("> ", .white),
+    ]
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            LinearGradient(colors: [Color(red: 0.20, green: 0.15, blue: 0.38), Color(red: 0.04, green: 0.26, blue: 0.36)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            HStack(spacing: 16) {
+                Image(systemName: "apple.logo")
+                Text("Terminal").fontWeight(.semibold)
+                Text("Shell"); Text("Edit"); Text("View"); Text("Window")
+                Spacer()
+                HStack(spacing: 4) { Image(systemName: "gauge.with.dots.needle.67percent"); Text("4.82M").monospacedDigit() }
+                Image(systemName: "wifi"); Image(systemName: "battery.75percent")
+                Text("Wed 14:32")
+            }
+            .font(.system(size: 13)).foregroundStyle(.white)
+            .padding(.horizontal, 16).frame(width: 1100, height: 28)
+            .background(Color.black.opacity(0.3))
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    Circle().fill(Color(red: 1, green: 0.37, blue: 0.34))
+                    Circle().fill(Color(red: 1, green: 0.74, blue: 0.18))
+                    Circle().fill(Color(red: 0.16, green: 0.79, blue: 0.25))
+                }
+                .frame(width: 52, height: 12).padding(14)
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                        Text(l.0.isEmpty ? " " : l.0).foregroundStyle(l.1)
+                    }
+                }
+                .font(.system(size: 13, design: .monospaced))
+                .padding(.horizontal, 18)
+                Spacer()
+            }
+            .frame(width: 900, height: 470, alignment: .topLeading)
+            .background(Color(white: 0.09))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .shadow(color: .black.opacity(0.4), radius: 24, y: 10)
+            .offset(x: 50, y: 90)
+
+            OverlayView(store: store, settings: settings, solid: true)
+                .opacity(0.85)
+                .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+                .offset(x: 1100 - 240 - 28, y: 48)
+        }
+        .frame(width: 1100, height: 620)
+    }
+}
+
+@MainActor func renderScreenshots(to dir: String) {
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    func save<V: View>(_ view: V, _ name: String) {
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        guard let img = r.nsImage, let tiff = img.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
+            print("failed: \(name)"); return
+        }
+        let path = (dir as NSString).appendingPathComponent(name)
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("wrote \(path)")
+    }
+    let store = demoStore()
+    save(DemoDesktop(store: store, settings: demoSettings(compact: false)), "overlay-desktop.png")
+    save(OverlayView(store: store, settings: demoSettings(compact: false), solid: true)
+            .shadow(color: .black.opacity(0.3), radius: 12, y: 4).padding(24), "overlay-full.png")
+    save(OverlayView(store: store, settings: demoSettings(compact: true), solid: true)
+            .shadow(color: .black.opacity(0.3), radius: 12, y: 4).padding(24), "overlay-compact.png")
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--render-screenshots") {
+    let dir = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "docs"
+    MainActor.assumeIsolated { renderScreenshots(to: dir) }
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--dump") {   // headless check: print totals and exit

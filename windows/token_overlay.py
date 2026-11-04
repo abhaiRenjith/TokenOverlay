@@ -40,8 +40,12 @@ def source_of(entrypoint):
 def fmt(n):
     if n >= 1e9:
         return f"{n / 1e9:.2f}B"
+    if n >= 1e8:
+        return f"{n / 1e6:.0f}M"
     if n >= 1e6:
         return f"{n / 1e6:.2f}M"
+    if n >= 1e5:
+        return f"{n / 1e3:.0f}K"
     if n >= 1e3:
         return f"{n / 1e3:.1f}K"
     return str(n)
