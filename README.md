@@ -16,7 +16,7 @@ It reads the session logs those clients write to `~/.claude/projects` (on Window
   <img src="docs/overlay-compact.png" alt="Compact overlay" width="288">
 </p>
 
-<sub>Images are rendered from the app's own view with sample numbers (macOS). Regenerate with `TokenOverlay --render-screenshots docs`.</sub>
+<sub>Images are rendered from the app's own view with sample numbers (macOS). Regenerate with `TokenOverlay --render-screenshots docs` (after `macos/build.sh --install`).</sub>
 
 ## What it shows
 
@@ -29,10 +29,12 @@ It reads the session logs those clients write to `~/.claude/projects` (on Window
 Native Swift app with a menu bar icon. Needs macOS 14+ and the Xcode command line tools (`xcode-select --install`).
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/abhaiRenjith/TokenOverlay.git
 cd TokenOverlay/macos
-./build.sh --run
+./build.sh --install --run
 ```
+
+Cloning only downloads the source; `build.sh` compiles the app. `--install` links it as a `TokenOverlay` command in `~/.local/bin` (no sudo; set `INSTALL_DIR` to pick another folder) and tells you if that folder is not on your `PATH`. `--run` opens the overlay. Without `--install`, run the binary by its full path: `"macos/Claude Token Overlay.app/Contents/MacOS/TokenOverlay"`.
 
 Settings live in the menu bar icon: opacity, opacity on hover, click-through, compact mode, count in the menu bar, launch at login, reset position.
 
@@ -41,7 +43,7 @@ Settings live in the menu bar icon: opacity, opacity on hover, click-through, co
 Python script with no dependencies beyond the standard library. Needs Python 3.8+ from [python.org](https://www.python.org/downloads/) (tick "Add to PATH").
 
 ```bat
-git clone <repo-url>
+git clone https://github.com/abhaiRenjith/TokenOverlay.git
 cd TokenOverlay\windows
 run.bat
 ```
@@ -51,7 +53,7 @@ Right-click the overlay for settings: period, opacity, compact mode, click-throu
 ## Both
 
 - Drag the overlay to move it; the position is remembered.
-- `--dump` prints the totals to the terminal and exits (`TokenOverlay --dump` on macOS, `python token_overlay.py --dump` on Windows).
+- `--dump` prints the totals to the terminal and exits (`TokenOverlay --dump` on macOS after `./build.sh --install`, `python token_overlay.py --dump` on Windows).
 
 ## Notes
 
