@@ -5,6 +5,7 @@
 import AppKit
 import SwiftUI
 import ServiceManagement
+import ImageIO
 
 // MARK: - Model
 
@@ -490,7 +491,8 @@ func demoSettings(compact: Bool) -> Settings {
 struct DemoDesktop: View {
     let store: Store
     let settings: Settings
-    let lines: [(String, Color)] = [
+    var lines: [(String, Color)] { Self.sampleLines }
+    static let sampleLines: [(String, Color)] = [
         ("$ claude", .white),
         ("> refactor the payment module and add tests", Color(white: 0.85)),
         ("", .white),
@@ -557,6 +559,144 @@ struct DemoDesktop: View {
     }
 }
 
+func scaled(_ s: Stats, _ f: Double) -> Stats {
+    func m(_ v: Int) -> Int { Int(Double(v) * f) }
+    var o = Stats()
+    o.input = m(s.input); o.output = m(s.output); o.cacheWrite = m(s.cacheWrite); o.cacheRead = m(s.cacheRead)
+    o.bySource = s.bySource.mapValues(m)
+    return o
+}
+
+let demoBackdrop = LinearGradient(colors: [Color(red: 0.20, green: 0.15, blue: 0.38), Color(red: 0.04, green: 0.26, blue: 0.36)],
+                                  startPoint: .topLeading, endPoint: .bottomTrailing)
+
+/// Small scene for animations: terminal text behind the overlay, plus an optional cursor.
+struct DemoScene: View {
+    let store: Store
+    let settings: Settings
+    var alpha = 0.85
+    var cursor: CGPoint? = nil
+    var ripple: Double? = nil      // 0...1 click animation progress
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            demoBackdrop
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 7) {
+                    Circle().fill(Color(red: 1, green: 0.37, blue: 0.34))
+                    Circle().fill(Color(red: 1, green: 0.74, blue: 0.18))
+                    Circle().fill(Color(red: 0.16, green: 0.79, blue: 0.25))
+                }
+                .frame(width: 46, height: 11).padding(.bottom, 8)
+                ForEach(Array(DemoDesktop.sampleLines.prefix(11).enumerated()), id: \.offset) { _, l in
+                    Text(l.0.isEmpty ? " " : l.0).foregroundStyle(l.1)
+                }
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .padding(14)
+            .frame(width: 470, height: 290, alignment: .topLeading)
+            .background(Color(white: 0.09))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .offset(x: 20, y: 30)
+
+            OverlayView(store: store, settings: settings, solid: true)
+                .opacity(alpha)
+                .shadow(color: .black.opacity(0.35), radius: 14, y: 5)
+                .offset(x: 316, y: 20)
+
+            if let c = cursor {
+                if let r = ripple {
+                    Circle().stroke(Color.white.opacity(0.8 * (1 - r)), lineWidth: 2)
+                        .frame(width: 10 + 30 * r, height: 10 + 30 * r)
+                        .offset(x: c.x - 5 - 15 * r, y: c.y - 5 - 15 * r)
+                }
+                Image(systemName: "cursorarrow")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.7), radius: 1.5)
+                    .offset(x: c.x - 4, y: c.y - 3)
+            }
+        }
+        .frame(width: 580, height: 340)
+        .clipped()
+    }
+}
+
+@MainActor func renderGIF(_ name: String, dir: String, fps: Double, frames: Int, scale: CGFloat = 2,
+                          view: (Int) -> AnyView) {
+    let url = URL(fileURLWithPath: (dir as NSString).appendingPathComponent(name))
+    guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "com.compuserve.gif" as CFString, frames, nil) else {
+        print("failed: \(name)"); return
+    }
+    CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1 / fps,
+                                                 kCGImagePropertyGIFUnclampedDelayTime: 1 / fps]] as CFDictionary
+    for i in 0..<frames {
+        let r = ImageRenderer(content: view(i))
+        r.scale = scale
+        if let cg = r.cgImage { CGImageDestinationAddImage(dest, cg, props) }
+    }
+    print(CGImageDestinationFinalize(dest) ? "wrote \(url.path)" : "failed: \(name)")
+}
+
+/// Hover fade, then three clicks on the number to switch period, then fade back.
+@MainActor func renderInteractionGIF(dir: String) {
+    let fps = 15.0
+    let base = demoStore()
+    // cursor keyframes: (time, x, y)
+    let keys: [(Double, Double, Double)] = [
+        (0.0, 150, 300), (0.8, 150, 300), (1.8, 372, 66), (3.2, 372, 66), (4.0, 200, 230),
+        (4.8, 200, 230), (5.6, 372, 66), (8.4, 372, 66), (9.2, 170, 290), (10.4, 170, 290),
+    ]
+    let clicks: [(Double, Period)] = [(6.0, .fiveHours), (6.9, .week), (7.8, .today)]
+    let duration = 10.4
+    let frames = Int(duration * fps)
+    let overlayRect = CGRect(x: 316, y: 20, width: 240, height: 250)
+
+    func cursor(at t: Double) -> CGPoint {
+        for k in 1..<keys.count where t <= keys[k].0 {
+            let a = keys[k - 1], b = keys[k]
+            var p = (t - a.0) / max(b.0 - a.0, 0.001)
+            p = p * p * (3 - 2 * p)
+            return CGPoint(x: a.1 + (b.1 - a.1) * p, y: a.2 + (b.2 - a.2) * p)
+        }
+        return CGPoint(x: keys.last!.1, y: keys.last!.2)
+    }
+
+    var alphas: [Double] = []
+    var a = 0.85
+    for i in 0..<frames {
+        let target = overlayRect.contains(cursor(at: Double(i) / fps)) ? 0.30 : 0.85
+        a += max(-0.08, min(0.08, target - a))
+        alphas.append(a)
+    }
+
+    renderGIF("overlay-interaction.gif", dir: dir, fps: fps, frames: frames) { i in
+        let t = Double(i) / fps
+        let settings = demoSettings(compact: false)
+        settings.period = clicks.last(where: { $0.0 <= t })?.1 ?? .today
+        let ripple = clicks.map { t - $0.0 }.first(where: { $0 >= 0 && $0 < 0.4 }).map { $0 / 0.4 }
+        return AnyView(DemoScene(store: base, settings: settings, alpha: alphas[i], cursor: cursor(at: t), ripple: ripple))
+    }
+}
+
+/// The number climbing as requests come in.
+@MainActor func renderCountGIF(dir: String) {
+    let fps = 15.0, duration = 5.0
+    let base = demoStore()
+    renderGIF("overlay-live.gif", dir: dir, fps: fps, frames: Int(duration * fps)) { i in
+        let step = Double(min(Int(Double(i) / fps / 0.5), 9))   // a new request every 0.5 s
+        let f = 0.96 + 0.04 * step / 9
+        let st = Store()
+        st.stats = base.stats.mapValues { scaled($0, f) }
+        st.updated = Date()
+        return AnyView(
+            ZStack { demoBackdrop; OverlayView(store: st, settings: demoSettings(compact: false), solid: true)
+                .shadow(color: .black.opacity(0.35), radius: 14, y: 5) }
+            .frame(width: 300, height: 300))
+    }
+}
+
 @MainActor func renderScreenshots(to dir: String) {
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     func save<V: View>(_ view: V, _ name: String) {
@@ -576,6 +716,8 @@ struct DemoDesktop: View {
             .shadow(color: .black.opacity(0.3), radius: 12, y: 4).padding(24), "overlay-full.png")
     save(OverlayView(store: store, settings: demoSettings(compact: true), solid: true)
             .shadow(color: .black.opacity(0.3), radius: 12, y: 4).padding(24), "overlay-compact.png")
+    renderInteractionGIF(dir: dir)
+    renderCountGIF(dir: dir)
 }
 
 if let i = CommandLine.arguments.firstIndex(of: "--render-screenshots") {

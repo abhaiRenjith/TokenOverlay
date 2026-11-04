@@ -4,14 +4,19 @@ A small, translucent, always-on-top overlay that tracks your Claude Code token u
 
 It reads the session logs those clients write to `~/.claude/projects` (on Windows `%USERPROFILE%\.claude\projects`; also `~/.config/claude/projects` and `$CLAUDE_CONFIG_DIR`). Nothing leaves your machine.
 
+**[Try it in your browser →](https://abhairenjith.github.io/TokenOverlay/)** drag it, hover it, click the number, change the opacity.
+
 ![The overlay floating over a terminal](docs/overlay-desktop.png)
 
 <p>
-  <img src="docs/overlay-full.png" alt="Full overlay" width="288">
+  <img src="docs/overlay-interaction.gif" alt="Hovering fades the overlay; clicking the number switches between today, last 5h and 7 days" width="580">
+</p>
+<p>
+  <img src="docs/overlay-live.gif" alt="The count climbing as requests come in" width="288">
   <img src="docs/overlay-compact.png" alt="Compact overlay" width="288">
 </p>
 
-<sub>Screenshots are rendered from the app's own view with sample numbers (macOS). Regenerate with `TokenOverlay --render-screenshots docs`.</sub>
+<sub>Images are rendered from the app's own view with sample numbers (macOS). Regenerate with `TokenOverlay --render-screenshots docs`.</sub>
 
 ## What it shows
 
@@ -57,3 +62,7 @@ Right-click the overlay for settings: period, opacity, compact mode, click-throu
 ## License
 
 MIT
+
+## Demo page
+
+`docs/index.html` is the browser demo. To publish it, open the repo on GitHub → Settings → Pages, and set the source to the `main` branch, `/docs` folder.

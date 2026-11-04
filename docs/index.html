@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Token Overlay</title>
+<meta name="description" content="Try the Claude Token Overlay in your browser: a translucent, always-on-top token counter for Claude Code.">
+<style>
+  :root {
+    --bg: #f6f5f2; --text: #1d1d1f; --muted: #6b6b70; --card: #ffffff; --line: rgba(0,0,0,.1);
+    --accent: #534AB7;
+    --cli: #7F77DD; --app: #1D9E75; --ide: #D85A30;
+    --ov-bg: rgba(30,30,32,1); --ov-fg: #f2f2f2; --ov-muted: #a1a1a6; --ov-line: rgba(255,255,255,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111113; --text: #ececee; --muted: #9a9aa0; --card: #1b1b1e; --line: rgba(255,255,255,.1); --accent: #AFA9EC; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 30px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.3px; }
+  .lede { color: var(--muted); margin: 0 0 28px; max-width: 640px; }
+  a { color: var(--accent); }
+
+  .desk { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;
+          background: linear-gradient(135deg, #33265f, #0a4259); user-select: none; touch-action: none; }
+  .menubar { position: absolute; inset: 0 0 auto 0; height: 26px; background: rgba(0,0,0,.3); color: #fff;
+             font-size: 12.5px; display: flex; align-items: center; gap: 14px; padding: 0 14px; }
+  .menubar .sp { flex: 1; }
+  .menubar b { font-weight: 600; }
+  .term { position: absolute; left: 4.5%; top: 13%; width: 70%; height: 76%; background: #171717; border-radius: 10px;
+          box-shadow: 0 12px 40px rgba(0,0,0,.45); padding: 14px 18px; overflow: hidden;
+          font: 13px/1.75 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #d9d9d9; }
+  .dots { display: flex; gap: 7px; margin-bottom: 10px; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .g { color: #73cc8c; } .d { color: #999; }
+  .term .line { white-space: pre; }
+
+  .ov { position: absolute; top: 8%; right: 2.5%; width: 240px; border-radius: 14px; padding: 11px 14px 12px;
+        background: var(--ov-bg); color: var(--ov-fg); box-shadow: 0 10px 30px rgba(0,0,0,.4);
+        border: .5px solid var(--ov-line); cursor: grab; transition: opacity .18s ease;
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .ov.dragging { cursor: grabbing; transition: none; }
+  .ov .hd { display: flex; justify-content: space-between; color: var(--ov-muted); font-size: 11px; }
+  .ov .big { font-size: 27px; font-weight: 600; letter-spacing: -.4px; font-variant-numeric: tabular-nums;
+             cursor: pointer; display: inline-block; margin: 1px 0 4px; }
+  .ov.compact .big { font-size: 21px; }
+  .ov .bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.12); display: flex; overflow: hidden; }
+  .ov .bar span { display: block; height: 100%; transition: width .3s ease; }
+  .ov .legend { display: flex; gap: 9px; margin-top: 6px; color: var(--ov-muted); font-size: 11px; white-space: nowrap; }
+  .ov .legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+  .ov .rows { border-top: .5px solid var(--ov-line); margin-top: 8px; padding-top: 6px; }
+  .ov .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--ov-muted); font-variant-numeric: tabular-nums; }
+  .ov .row b { color: var(--ov-fg); font-weight: 400; }
+  .ov.compact .legend, .ov.compact .rows { display: none; }
+  .ov.through { pointer-events: none; }
+  .bump { animation: bump .45s ease; }
+  @keyframes bump { 30% { color: #9fe1cb; } }
+
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px;
+              background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-top: 18px; }
+  .controls label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+  .controls .top { display: flex; justify-content: space-between; }
+  .controls .top b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .controls .check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  .hint { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+  kbd { font: 12px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 28px; }
+
+  @media (max-width: 700px) {
+    .desk { aspect-ratio: 3 / 4; }
+    .term { width: 92%; height: 52%; top: auto; bottom: 4%; font-size: 11px; }
+    .menubar .opt { display: none; }
+    .ov { top: 7%; right: 4%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Claude Token Overlay</h1>
+  <p class="lede">A translucent, always-on-top counter for your Claude Code tokens across the CLI, the desktop app and IDE extensions. Try it below with sample numbers: drag it, hover it, click the number, and change the settings. <a href="https://github.com/abhaiRenjith/TokenOverlay">Get it on GitHub</a>.</p>
+
+  <div class="desk" id="desk">
+    <div class="menubar">
+      <b>Terminal</b><span class="opt">Shell</span><span class="opt">Edit</span><span class="opt">View</span>
+      <span class="sp"></span><span id="mb">◔ 4.82M</span><span class="opt" id="clock">14:32</span>
+    </div>
+    <div class="term" aria-hidden="true">
+      <div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+      <div class="line">$ claude</div>
+      <div class="line">&gt; refactor the payment module and add tests</div>
+      <div class="line"> </div>
+      <div class="line d">● Read src/payments/charge.ts (182 lines)</div>
+      <div class="line d">● Read src/payments/refund.ts (96 lines)</div>
+      <div class="line g">● Update src/payments/charge.ts  +41 −27</div>
+      <div class="line g">● Update src/payments/refund.ts  +18 −9</div>
+      <div class="line g">● Write tests/payments/charge.test.ts  +120</div>
+      <div class="line d">● Bash npm test -- payments</div>
+      <div class="line g">  ✓ 24 passed (1.8s)</div>
+      <div class="line"> </div>
+      <div class="line">Split charge() into validate, authorize and capture steps so each can be tested alone.</div>
+    </div>
+
+    <div class="ov" id="ov" role="region" aria-label="Token overlay demo">
+      <div class="hd"><span id="title">Claude tokens · today</span><span>≡</span></div>
+      <div class="big" id="big" title="Click to switch period">4.82M</div>
+      <div class="bar" id="bar"><span style="background:var(--cli)"></span><span style="background:var(--app)"></span><span style="background:var(--ide)"></span></div>
+      <div class="legend" id="legend"></div>
+      <div class="rows" id="rows"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label><span class="top">Opacity <b id="o1v">85%</b></span><input type="range" id="o1" min="15" max="100" step="1" value="85"></label>
+    <label><span class="top">Opacity on hover <b id="o2v">30%</b></span><input type="range" id="o2" min="5" max="100" step="1" value="30"></label>
+    <label class="check"><input type="checkbox" id="compact"> Compact</label>
+    <label class="check"><input type="checkbox" id="through"> Click-through</label>
+    <label class="check"><input type="checkbox" id="live" checked> Simulate live usage</label>
+  </div>
+  <p class="hint">With click-through on, the overlay ignores the mouse. Hold <kbd>Ctrl</kbd> or <kbd>⌘</kbd> to grab it again.</p>
+  <p class="note">This page is a browser imitation with made-up numbers. The real app reads the session logs on your own computer and sends nothing anywhere.</p>
+</main>
+
+<script>
+(() => {
+  const SRC = [["CLI", "var(--cli)"], ["App", "var(--app)"], ["IDE", "var(--ide)"]];
+  const PERIODS = [["today", "today"], ["5h", "last 5h"], ["week", "7 days"]];
+  const data = {
+    today: { src: [2510000, 1610000, 703000], in: 41200, out: 212400, cw: 608000 },
+    "5h":  { src: [820000, 390000, 100000],  in: 9800,  out: 61000,  cw: 150000 },
+    week:  { src: [15900000, 8300000, 4200000], in: 260000, out: 1350000, cw: 3100000 },
+  };
+  const total = d => d.src.reduce((a, b) => a + b, 0);
+  const fmt = n => n >= 1e8 ? (n / 1e6).toFixed(0) + "M" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M"
+                 : n >= 1e5 ? (n / 1e3).toFixed(0) + "K" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(Math.round(n));
+  const cap = s => s[0].toUpperCase() + s.slice(1);
+  const $ = id => document.getElementById(id);
+  const ov = $("ov"), desk = $("desk");
+  let period = "today", hovering = false, grabKey = false;
+
+  function render(bump) {
+    const d = data[period], t = total(d);
+    $("title").textContent = "Claude tokens · " + PERIODS.find(p => p[0] === period)[1];
+    $("big").textContent = fmt(t);
+    if (bump) { $("big").classList.remove("bump"); void $("big").offsetWidth; $("big").classList.add("bump"); }
+    [...$("bar").children].forEach((s, i) => s.style.width = (100 * d.src[i] / t) + "%");
+    $("legend").innerHTML = SRC.map(([n, c], i) => `<span><i style="background:${c}"></i>${n} ${fmt(d.src[i])}</span>`).join("");
+    const cr = t - d.in - d.out - d.cw;
+    $("rows").innerHTML = PERIODS.filter(p => p[0] !== period)
+      .map(([k, l]) => `<div class="row"><span>${cap(l)}</span><b>${fmt(total(data[k]))}</b></div>`).join("")
+      + `<div class="row"><span>In / out</span><span>${fmt(d.in)} / ${fmt(d.out)}</span></div>`
+      + `<div class="row"><span>Cache write / read</span><span>${fmt(d.cw)} / ${fmt(cr)}</span></div>`;
+    $("mb").textContent = "◔ " + fmt(t);
+  }
+
+  function applyOpacity() {
+    const v = (hovering ? $("o2").value : $("o1").value) / 100;
+    ov.style.opacity = v;
+    $("o1v").textContent = $("o1").value + "%";
+    $("o2v").textContent = $("o2").value + "%";
+  }
+
+  function applyThrough() { ov.classList.toggle("through", $("through").checked && !grabKey); }
+
+  // hover is tracked from the cursor position, like the app, so it also works in click-through mode
+  function setHover(h) { if (h !== hovering) { hovering = h; applyOpacity(); } }
+  document.addEventListener("pointermove", e => {
+    const r = ov.getBoundingClientRect();
+    setHover(e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom);
+  });
+  document.documentElement.addEventListener("pointerleave", () => setHover(false));
+  ["o1", "o2"].forEach(id => $(id).addEventListener("input", applyOpacity));
+  $("compact").addEventListener("change", e => ov.classList.toggle("compact", e.target.checked));
+  $("through").addEventListener("change", applyThrough);
+  addEventListener("keydown", e => { if (e.key === "Control" || e.key === "Meta") { grabKey = true; applyThrough(); } });
+  addEventListener("keyup", e => { if (e.key === "Control" || e.key === "Meta") { grabKey = false; applyThrough(); } });
+  addEventListener("blur", () => { grabKey = false; applyThrough(); });
+
+  // drag, with a short press on the number switching the period
+  let drag = null;
+  ov.addEventListener("pointerdown", e => {
+    const r = ov.getBoundingClientRect(), dr = desk.getBoundingClientRect();
+    drag = { x: e.clientX, y: e.clientY, left: r.left - dr.left, top: r.top - dr.top, moved: false, onBig: e.target.id === "big" };
+    ov.setPointerCapture(e.pointerId);
+  });
+  ov.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+    drag.moved = true; ov.classList.add("dragging");
+    const dr = desk.getBoundingClientRect();
+    const left = Math.min(Math.max(drag.left + dx, 0), dr.width - ov.offsetWidth);
+    const top = Math.min(Math.max(drag.top + dy, 26), dr.height - ov.offsetHeight);
+    Object.assign(ov.style, { left: left + "px", top: top + "px", right: "auto" });
+  });
+  ov.addEventListener("pointerup", () => {
+    if (drag && !drag.moved && drag.onBig) {
+      const i = PERIODS.findIndex(p => p[0] === period);
+      period = PERIODS[(i + 1) % PERIODS.length][0];
+      render(false);
+    }
+    drag = null; ov.classList.remove("dragging");
+  });
+
+  // simulated usage: a "request" lands every couple of seconds
+  setInterval(() => {
+    if (!$("live").checked) return;
+    const which = Math.random() < .55 ? 0 : Math.random() < .7 ? 1 : 2;
+    const read = 60000 + Math.random() * 60000, out = 800 + Math.random() * 3000, cw = Math.random() * 6000;
+    for (const k of Object.keys(data)) {
+      const d = data[k];
+      d.src[which] += Math.round(read + out + cw); d.out += Math.round(out); d.cw += Math.round(cw);
+    }
+    render(true);
+  }, 2200);
+
+  const now = new Date();
+  $("clock").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  render(false); applyOpacity();
+})();
+</script>
+</body>
+</html>
