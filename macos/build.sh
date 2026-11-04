@@ -1,11 +1,26 @@
 #!/bin/zsh
-# Builds Claude Token Overlay.app next to this script. Usage: ./build.sh [--run]
+# Builds Claude Token Overlay.app next to this script.
+# Usage: ./build.sh [--install] [--run]
+#   --install  link the binary as `TokenOverlay` into $INSTALL_DIR (default ~/.local/bin)
+#   --run      open the app after building
 set -euo pipefail
 cd "${0:A:h}"
 APP="Claude Token Overlay.app"
+BIN="$PWD/$APP/Contents/MacOS/TokenOverlay"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+
+do_install=0 do_run=0
+for arg in "$@"; do
+  case "$arg" in
+    --install) do_install=1 ;;
+    --run) do_run=1 ;;
+    *) echo "Unknown option: $arg (use --install and/or --run)" >&2; exit 2 ;;
+  esac
+done
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-swiftc -O -target "$(uname -m)-apple-macos14" Sources/main.swift -o "$APP/Contents/MacOS/TokenOverlay"
+swiftc -O -target "$(uname -m)-apple-macos14" Sources/main.swift -o "$BIN"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -21,4 +36,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --sign - "$APP" >/dev/null 2>&1
 echo "Built: $PWD/$APP"
-if [[ "${1:-}" == "--run" ]]; then open "$APP"; fi
+
+if (( do_install )); then
+  mkdir -p "$INSTALL_DIR"
+  # A symlink, so later rebuilds are picked up without reinstalling.
+  ln -sf "$BIN" "$INSTALL_DIR/TokenOverlay"
+  echo "Installed: $INSTALL_DIR/TokenOverlay -> $BIN"
+  if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+    echo "Try it: TokenOverlay --dump   (run 'rehash' or open a new tab if your shell says command not found)"
+  else
+    echo "$INSTALL_DIR is not on your PATH. Add it, then open a new terminal tab:"
+    echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.zshrc"
+  fi
+else
+  echo "Print totals: \"$BIN\" --dump"
+  echo "Or run ./build.sh --install to get a plain 'TokenOverlay' command."
+fi
+
+if (( do_run )); then open "$APP"; fi
